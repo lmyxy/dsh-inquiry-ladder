@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Inquiry ladder",
-    "description": "Layered Socratic inquiry over a paper or any long content: orient, decompose, premise, evidence, boundary — each question triggered by a weakness in the previous answer, every answer evidence-graded, ending in a report with source anchors.",
+    "description": "Layered Socratic inquiry over a paper, a Word document, a PDF, or any long content: orient, decompose, premise, evidence, boundary — each question triggered by a weakness in the previous answer, every answer evidence-graded, ending with actionable research problems and a report.",
     "detail": "docs/DETAIL.md"
   }
 }

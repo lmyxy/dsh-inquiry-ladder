@@ -6,7 +6,9 @@ import {
   hasAnchor,
   isRepeat,
   normalizeCritique,
+  normalizeProblems,
   normalizeQuestion,
+  problemKindLabel,
   similarity,
 } from '../lib/ladder.js';
 import { parseJsonLoose } from '../lib/engine.js';
@@ -102,6 +104,30 @@ test('normalize: question and critique shapes survive bad input', () => {
   assert.equal(critique.verdict, 'pass');
   assert.deepEqual(critique.residual, ['x']);
   assert.deepEqual(critique.nextCandidates, ['evidence', 'boundary']);
+});
+
+test('problems: kinds are whitelisted and slogans are dropped', () => {
+  const problems = normalizeProblems({
+    problems: [
+      { title: '冷启动收益', kind: 'deployment', statement: '只在 warm cache 下测过', firstStep: 'cache-off 对照', difficulty: 'low' },
+      { title: '更好的可解释性', kind: 'mechanism', statement: '短' },
+      { title: '冷启动收益', kind: 'deployment', statement: '重复项' },
+      { title: '奇怪类型', kind: 'made-up', statement: 'x', difficulty: 'extreme' },
+    ],
+  });
+  assert.equal(problems.length, 2, 'slogan and near-duplicate dropped');
+  assert.equal(problems[0].kind, 'deployment');
+  assert.equal(problems[0].difficulty, 'low');
+  assert.equal(problems[1].kind, 'assumption', 'unknown kind falls back');
+  assert.equal(problems[1].difficulty, 'medium');
+  assert.equal(problemKindLabel('deployment'), '部署假设不成立');
+});
+
+test('problems: a slogan with real substance is kept', () => {
+  const problems = normalizeProblems({
+    problems: [{ title: '更好的可解释性', statement: '在调度器里需要解释每个 batch 的排队归因，当前只有总量指标，无法定位到请求级别。' }],
+  });
+  assert.equal(problems.length, 1);
 });
 
 test('json: fenced and prose-wrapped objects are recovered', () => {

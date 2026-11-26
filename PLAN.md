@@ -317,4 +317,9 @@ dsh-inquiry-ladder/
 - 期间修掉三个真实缺陷：`parameters` 必须是 JSON Schema（注册层不转换）、模型调用必须带 `sessionId`（opencode 路由缺省会 400 `MissingSessionID`）、推理模型会把输出预算耗在思考上（截断时 4 倍预算重试）。
 - 成本实测：单层约 1.2–1.5 万 token，三层加报告约 3 万；默认 `maxTokens` 因此从 80000 提到 150000。
 - 已知待办：`@local/dsh-paper-miner` 已安装但不在 `dsh.profile.bundles` 里，PDF 流程需先在插件页启用它。
+- 输入兼容实测（Host 内）：`.docx` 与 `.pdf` 两条路径都跑通——docx 的 TITLE 取自文档标题、8 条锚点逐字正确；pdf 走本机 `pdftotext`（TeX Live 自带），297 字符全文无丢失。标题曾被文件名带偏，已改为「模型回显文件名时退回正文首行」。
+- 科研问题实测：`inquiry_problems(focus="真实部署")` 产出 6 条全部带 qN 锚点、最小验证与风险，分类分布在「部署假设不成立 / 前提脆弱」；`top` 参数此前未被遵守（要 4 给 6），已在 `mineProblems` 里按 top 截断。
+- 难度评级实测：第一版把「6 档扫描 × 10 次重复」标成 low，已改为按 firstStep 的可数信号判定（≥5 个配置点 / ≥10 次重复 / 要报 p99.9 任一即 medium），复测 P1=medium、P2=medium、P3=high。
+- 输入兼容（2026-11-26 补）：`path` 按扩展名自动抽正文——md/txt/html 直读，docx/pptx/epub 走内置 ZIP+XML 解析，pdf 走外部 `pdftotext` 或 `python + pypdf`（可用 `pdfTool` / `pythonPath` 覆盖），老二进制 Office 与扫描件明确报错。测试见 `test/extract.mjs`。
+- 科研问题（2026-11-26 补）：新增 `inquiry_problems`，从证据骨架 + 已推进的层里挖 1–6 条可动手的科研问题（六类、五条硬规则、按可做性×影响排序）；`inquiry_report` 缺问题时自动补挖，报告新增「## 5 现实科研问题」。
 - 下一阶段（P3，待确认）：`tool.call.toolview` 自定义层级卡片、`settings.section` 配置页。

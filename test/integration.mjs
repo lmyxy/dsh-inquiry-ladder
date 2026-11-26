@@ -46,6 +46,34 @@ function reply(request) {
       nextCandidates: ['evidence', 'boundary'],
     };
   }
+  if (system.includes('科研选题的评审')) {
+    return {
+      problems: [
+        {
+          title: '冷缓存下批处理收益是否仍然成立',
+          kind: 'deployment',
+          statement: '论文只在 cache warm 的条件下报告了 40% 的 p99 降幅，真实部署里冷启动与缓存抖动是常态。',
+          whyReal: '容量规划直接取决于最坏情况下的收益，在线服务无法保证 cache warm。',
+          evidence: 'q4「keeps the cache warm across all runs」，以及 L2 的残留疑问「缓存状态未记录」',
+          novelty: '作者未提及',
+          firstStep: '同一合成负载上加一组 cache-off 对照，固定 batch=32，看 p99 差值还剩多少。',
+          risk: '冷缓存下收益可能完全消失，问题退化为「论文结论不成立」。',
+          difficulty: 'low',
+        },
+        {
+          title: '中间 batch 档位的 dose-response 缺口',
+          kind: 'eval',
+          statement: '消融只有 batch=1 与 batch=32 两端，无法区分单调摊薄与阈值跳变。',
+          whyReal: '如果收益集中在某个阈值，配置调优就会锁死在一个点上。',
+          evidence: 'q6「only compares batch=1 with batch=32」',
+          novelty: '作者已提及批大小，但没有中间档',
+          firstStep: 'batch=1/2/4/8/16/32 六档扫描，指标 p50/p99，固定 cache 与 connection reuse。',
+          risk: '合成负载的结论不能迁移到真实流量。',
+          difficulty: 'medium',
+        },
+      ],
+    };
+  }
   if (system.includes('合写者')) {
     return { verdict: '批处理的收益与批大小尚未分离 [E2]。', strongest: '最脆弱的是消融设计', unresolved: '缓存状态如何控制', nextAction: '跑一次 cache-off 对照' };
   }
@@ -115,6 +143,11 @@ assert.match(opened, /INQUIRY inq_/u);
 assert.match(opened, /THESIS/u);
 const inquiryId = /INQUIRY (inq_[a-z0-9_]+)/u.exec(opened)[1];
 
+const problems = await call('inquiry_problems', { inquiry_id: inquiryId, focus: '真实部署' });
+assert.match(problems, /RESEARCH PROBLEMS · 2 条/u);
+assert.match(problems, /P1 \[部署假设不成立\]/u);
+assert.match(problems, /冷缓存下批处理收益是否仍然成立/u);
+
 const first = await call('inquiry_probe', { inquiry_id: inquiryId });
 assert.match(first, /LAYER L1/u);
 assert.match(first, /拆解/u);
@@ -134,10 +167,12 @@ assert.match(tree, /L3/u);
 const report = await call('inquiry_report', { inquiry_id: inquiryId });
 const reportPath = /REPORT (.+)/u.exec(report)[1].trim();
 const markdown = await readFile(reportPath, 'utf8');
-for (const heading of ['# 追问报告', '## 0 定位', '## 1 问题树', '## 2 分层追问', '## 3 弱点与未证前提', '## 5 合成判断']) {
+for (const heading of ['# 追问报告', '## 0 定位', '## 1 问题树', '## 2 分层追问', '## 3 弱点与未证前提', '## 5 现实科研问题', '## 6 合成判断']) {
   assert.ok(markdown.includes(heading), `report missing ${heading}`);
 }
 assert.match(markdown, /q1/u);
+assert.match(markdown, /### P1 · 部署假设不成立/u);
+assert.match(markdown, /最小验证/u);
 
 const ledgerDir = path.join(home, 'inquiry', inquiryId);
 const files = await readdir(ledgerDir);
@@ -145,6 +180,7 @@ assert.deepEqual(files.sort(), ['source.txt', 'state.json']);
 const ledger = JSON.parse(await readFile(path.join(ledgerDir, 'state.json'), 'utf8'));
 assert.equal(ledger.layers.length, 3);
 assert.equal(ledger.status, 'closed');
+assert.equal(ledger.problems.length, 2);
 assert.ok(ledger.usage.calls >= 9);
 
 // A missing ledger must fail with guidance, not a stack trace.
@@ -153,9 +189,9 @@ assert.ok(seenSessionIds.every((id) => id === 'sess_integration_test'), 'every m
 const missing = await call('inquiry_view', { inquiry_id: 'inq_20260101_000000_zzzz' });
 assert.match(missing, /找不到追问记录/u);
 
-// A PDF path must point the caller at paper_brief instead of parsing bytes.
-const pdf = await call('inquiry_open', { path: 'whatever.pdf' });
-assert.match(pdf, /paper_brief/u);
+// A missing path must say so instead of guessing, whatever the extension.
+const missingSource = await call('inquiry_open', { path: 'whatever.pdf' });
+assert.match(missingSource, /找不到文件/u);
 
 console.log('integration ok');
 console.log(`  report: ${reportPath}`);

@@ -8,10 +8,10 @@ import path from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { OPERATOR_IDS, operatorById, label } from './lib/ladder.js';
-import { EngineError, extractBrief, resolveModel, runLayer, synthesize } from './lib/engine.js';
+import { EngineError, extractBrief, mineProblems, resolveModel, runLayer, synthesize } from './lib/engine.js';
 import { SourceError, normalizeSource } from './lib/source.js';
 import { StateError, newInquiryId, readState, writeSource, writeState } from './lib/state.js';
-import { renderLayer, renderLayerDigest, renderReport, renderTree } from './lib/report.js';
+import { renderLayer, renderLayerDigest, renderProblemsText, renderReport, renderTree } from './lib/report.js';
 import { params } from './lib/params.js';
 
 export const name = 'inquiry-ladder';
@@ -29,6 +29,8 @@ const DEFAULTS = {
   strictAnchors: true,
   reportDir: 'inquiry',
   roles: {},
+  pdfTool: '',
+  pythonPath: '',
 };
 
 const defineTool = (definition) => definition;
@@ -59,6 +61,8 @@ function settings(config) {
     strictAnchors: source.strictAnchors !== false,
     reportDir: typeof source.reportDir === 'string' && source.reportDir.trim() !== '' ? source.reportDir.trim() : DEFAULTS.reportDir,
     roles: { questioner: pick('questioner'), answerer: pick('answerer'), critic: pick('critic') },
+    pdfTool: typeof source.pdfTool === 'string' ? source.pdfTool.trim() : '',
+    pythonPath: typeof source.pythonPath === 'string' ? source.pythonPath.trim() : '',
   };
 }
 
@@ -125,10 +129,10 @@ export function apply(ctx, config) {
 
   ctx.tools.register(defineTool({
     name: 'inquiry_open',
-    description: 'Start a layered inquiry over a paper or any long content: extracts a quotable evidence skeleton (thesis, claims, evidence, hidden assumptions, verbatim quotes) and returns three entry points worth probing. Follow with inquiry_probe to dig one layer at a time. Costs about one model call. For a PDF, run paper_brief first and pass the text here.',
+    description: 'Start a layered inquiry over a paper, report, or any document: extracts a quotable evidence skeleton (thesis, claims, evidence, hidden assumptions, stated limitations, verbatim quotes) and returns three entry points worth probing. Accepts plain text, .md/.txt/.html, .docx, .pptx, .epub, .pdf, or a URL. Costs about one model call.',
     parameters: params({
       text: { type: 'string', description: '正文。与 path / url 三选一；长文会被截断并说明。' },
-      path: { type: 'string', description: '本地文本文件（.md/.txt）。PDF 请先用 paper_brief。' },
+      path: { type: 'string', description: '本地文档：md/txt/html/docx/pptx/epub/pdf 等，按扩展名自动抽取正文。' },
       url: { type: 'string', description: '网页地址；需要 profile 里有 web 服务。' },
       title: { type: 'string', description: '材料标题，缺省时从正文首行推断。' },
       focus: { type: 'string', description: '你特别想追问的角度，例如「它的评测是否公平」。' },
@@ -146,7 +150,7 @@ export function apply(ctx, config) {
       const runSettings = { ...resolved, maxDepth: depth };
       try {
         const routes = routesFor(ctx, exec, runSettings);
-        const source = await normalizeSource(args, { cwd: cwdOf(exec), maxChars: runSettings.maxSourceChars, web: serviceWeb(ctx), signal: exec?.signal });
+        const source = await normalizeSource(args, { cwd: cwdOf(exec), maxChars: runSettings.maxSourceChars, web: serviceWeb(ctx), signal: exec?.signal, settings: runSettings });
 
         const extracted = await extractBrief(ctx, { route: routes.questioner, source, focus: args.focus, lang: runSettings.lang, signal: exec?.signal, sessionId: sessionIdOf(exec) });
         const state = {
@@ -265,6 +269,51 @@ export function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
+    name: 'inquiry_problems',
+    description: 'Mine real, actionable research problems out of the document and the ladder so far: each one anchored in a quote or an exposed weakness, with what makes it a real problem, whether the author already raised it, a minimal experiment to start, and the main risk. Refuses slogan answers.',
+    parameters: params({
+      inquiry_id: INQUIRY_ID,
+      focus: { type: 'string', description: '优先挖哪个方向，例如「部署成本」「评测协议」。' },
+      top: { type: 'number', description: '要几条，1–6，默认 4。' },
+      refresh: { type: 'boolean', description: '已经有结果时重新挖一遍。' },
+    }),
+    output: OUT,
+    presentCall: (args) => ({ card: 'generic', kind: 'search', title: `提炼科研问题${args?.focus ? `（${args.focus}）` : ''}` }),
+    async execute(args, exec) {
+      try {
+        const state = await readState(args.inquiry_id);
+        const runSettings = state.settings ?? resolved;
+        if ((state.problems ?? []).length > 0 && args.refresh !== true) {
+          return { text: `${renderProblemsText(state)}\n\n（已有结果；要重挖加 refresh: true）` };
+        }
+        const routes = routesFor(ctx, exec, runSettings);
+        const top = typeof args.top === 'number' ? args.top : 4;
+        const mined = await mineProblems(ctx, {
+          route: routes.critic,
+          state,
+          focus: args.focus,
+          top,
+          lang: runSettings.lang,
+          signal: exec?.signal,
+          sessionId: sessionIdOf(exec),
+        });
+        if (mined.problems.length === 0) {
+          return { text: '这一轮没有挖出合格的问题（模型只给了空话，或材料太薄）。换一个更具体的 focus 再试一次。' };
+        }
+        state.problems = mined.problems;
+        state.usage = {
+          calls: (state.usage?.calls ?? 0) + mined.calls,
+          tokens: (state.usage?.tokens ?? 0) + ((mined.usage?.inputTokens ?? 0) + (mined.usage?.outputTokens ?? 0)),
+        };
+        await writeState(state);
+        return { text: renderProblemsText(state) };
+      } catch (error) {
+        return { text: failureText(error) };
+      }
+    },
+  }));
+
+  ctx.tools.register(defineTool({
     name: 'inquiry_report',
     description: 'Write the inquiry to a Markdown report in the workspace (question tree, every layer, aggregated weaknesses, open questions) and return the path plus a one-paragraph verdict. Costs one model call.',
     parameters: params({
@@ -279,19 +328,36 @@ export function apply(ctx, config) {
         const runSettings = state.settings ?? resolved;
         const routes = routesFor(ctx, exec, runSettings);
 
-        if ((state.layers ?? []).length === 0) {
-          return { text: '这条追问还没有任何一层，先用 inquiry_probe 推进至少一层再出报告。' };
+        if ((state.layers ?? []).length === 0 && (state.problems ?? []).length === 0) {
+          return { text: '还没有任何内容：先用 inquiry_probe 推进一层，或 inquiry_problems 先挖一轮科研问题。' };
         }
 
-        try {
-          const synthesized = await synthesize(ctx, { route: routes.critic, state, lang: runSettings.lang, signal: exec?.signal, sessionId: sessionIdOf(exec) });
-          state.summary = synthesized.value;
-          state.usage = {
-            calls: (state.usage?.calls ?? 0) + 1,
-            tokens: (state.usage?.tokens ?? 0) + ((synthesized.usage?.inputTokens ?? 0) + (synthesized.usage?.outputTokens ?? 0)),
-          };
-        } catch (error) {
-          state.summary = { verdict: `（合成段落失败：${failureText(error)}）` };
+        // The report always carries research problems: mine them when the caller
+        // did not, so a report is never just a critique without an exit.
+        if ((state.problems ?? []).length === 0) {
+          try {
+            const mined = await mineProblems(ctx, { route: routes.critic, state, lang: runSettings.lang, top: 4, signal: exec?.signal, sessionId: sessionIdOf(exec) });
+            state.problems = mined.problems;
+            state.usage = {
+              calls: (state.usage?.calls ?? 0) + mined.calls,
+              tokens: (state.usage?.tokens ?? 0) + ((mined.usage?.inputTokens ?? 0) + (mined.usage?.outputTokens ?? 0)),
+            };
+          } catch (error) {
+            state.problemError = failureText(error);
+          }
+        }
+
+        if ((state.layers ?? []).length > 0) {
+          try {
+            const synthesized = await synthesize(ctx, { route: routes.critic, state, lang: runSettings.lang, signal: exec?.signal, sessionId: sessionIdOf(exec) });
+            state.summary = synthesized.value;
+            state.usage = {
+              calls: (state.usage?.calls ?? 0) + 1,
+              tokens: (state.usage?.tokens ?? 0) + ((synthesized.usage?.inputTokens ?? 0) + (synthesized.usage?.outputTokens ?? 0)),
+            };
+          } catch (error) {
+            state.summary = { verdict: `（合成段落失败：${failureText(error)}）` };
+          }
         }
 
         state.status = 'closed';
@@ -306,10 +372,13 @@ export function apply(ctx, config) {
 
         const head = [
           `REPORT ${target}`,
-          `LAYERS ${state.layers.length} · CALLS ${state.usage.calls} · TOKENS ${state.usage.tokens}`,
+          `LAYERS ${state.layers.length} · PROBLEMS ${state.problems?.length ?? 0} · CALLS ${state.usage.calls} · TOKENS ${state.usage.tokens}`,
           '',
           state.summary?.verdict ? `结论 ${state.summary.verdict}` : '',
           state.summary?.unresolved ? `仍在追 ${state.summary.unresolved}` : '',
+          ...(state.problems ?? []).slice(0, 2).map((problem, index) => `科研问题 ${index + 1} ${problem.title}`),
+          (state.problems ?? []).length > 2 ? `（共 ${state.problems.length} 条，其余在报告里）` : '',
+          state.problemError ? `问题提炼失败：${state.problemError}` : '',
         ].filter(Boolean);
         return { text: head.join('\n') };
       } catch (error) {
@@ -339,7 +408,9 @@ function renderOpenResult(state, usage, calls) {
   const brief = state.brief ?? {};
   const lines = [];
   lines.push(`INQUIRY ${state.id} · L0 定位 · ${calls ?? 1} call · ${(usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)} tok`);
-  lines.push(`SOURCE ${state.source?.kind ?? 'text'} · ${state.source?.chars ?? 0} 字符${state.source?.truncated ? '（已截断）' : ''}`);
+  const origin = [state.source?.format ?? state.source?.kind ?? 'text', state.source?.engine].filter(Boolean).join(' via ');
+  lines.push(`SOURCE ${origin} · ${state.source?.chars ?? 0} 字符${state.source?.truncated ? '（已截断）' : ''}`);
+  if (state.source?.note) lines.push(`NOTE ${state.source.note}`);
   lines.push('');
   lines.push(`TITLE ${brief.title || state.source?.title || '(未命名)'}`);
   if (brief.thesis) lines.push(`THESIS ${brief.thesis}`);
