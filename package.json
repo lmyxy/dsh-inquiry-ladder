@@ -1,0 +1,31 @@
+{
+  "name": "@local/dsh-inquiry-ladder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Layered Socratic inquiry: raise progressively deeper questions about a paper or any long content, answer them, challenge them, and keep probing.",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "skills",
+    "cordis.patch.yml",
+    "docs",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.en.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.1 <0.2.3-0"
+  }
+}

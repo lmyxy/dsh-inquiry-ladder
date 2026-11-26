@@ -1,0 +1,6 @@
+# inquiry-ladder bundle: inserts the Host plugin row into the profile composition.
+# Every value below can be overridden from the profile's cordis.patch.yml.
+- insert:
+    - id: inquiry-ladder
+      name: '@local/dsh-inquiry-ladder'
+      config: {}
